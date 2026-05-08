@@ -5,6 +5,7 @@ import {
   createMatch,
   currentFrame,
   endCurrentFrame,
+  endMatch,
   frameScore,
   frameWins,
   getFrameLeader,
@@ -12,21 +13,34 @@ import {
   redoEvent,
   undoEvent
 } from "./scoring.js";
-import { loadState, removeMatch, removePlayer, resetDemoData, saveMatch, savePlayer } from "./storage.js";
+import { loadState, removeMatch, removePlayer, removeTeam, resetDemoData, saveMatch, savePlayer, saveTeam } from "./storage.js";
 
 const app = document.querySelector("#app");
+const characters = [
+  { id: "rocket", name: "Rocket", emoji: "🚀" },
+  { id: "wizard", name: "Cue Wizard", emoji: "🧙" },
+  { id: "queen", name: "Potting Queen", emoji: "👑" },
+  { id: "shark", name: "Table Shark", emoji: "🦈" },
+  { id: "dragon", name: "Break Dragon", emoji: "🐉" },
+  { id: "ninja", name: "Safety Ninja", emoji: "🥷" }
+];
+const trophies = ["🏆", "🥇", "🎯", "🔥", "🧊", "🛡️", "🪄", "😂"];
 const state = {
   route: "score",
   players: [],
+  teams: [],
   matches: [],
   activeMatchId: null,
   selectedPlayerId: null,
-  draft: { mode: "standard", playerIds: [], bestOf: 3, starterId: null }
+  selectedTeamId: null,
+  notice: "",
+  transition: 0,
+  draft: { mode: "standard", playerIds: [], bestOf: 3, starterId: null, teamId: "" }
 };
 
-const money = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
-const $ = (selector) => document.querySelector(selector);
+const dateFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
 const byId = (id) => state.players.find((player) => player.id === id);
+const teamById = (id) => state.teams.find((team) => team.id === id);
 const activeMatch = () => state.matches.find((match) => match.id === state.activeMatchId) ?? state.matches[0];
 const matchPlayers = (match) => match?.playerIds.map((id) => byId(id) ?? match.playerSnapshots.find((p) => p.id === id)).filter(Boolean) ?? [];
 
@@ -45,14 +59,15 @@ function render() {
     <header class="hero">
       <div>
         <p class="eyebrow">Snooker Mate</p>
-        <h1>Tap balls, track frames, settle bragging rights.</h1>
+        <h1>Score faster, celebrate louder, never wonder what just happened.</h1>
       </div>
       <button class="ghost" data-action="seed">Reset demo data</button>
     </header>
     <nav class="tabs" aria-label="Main sections">
-      ${tab("score", "Score")}${tab("setup", "New game")}${tab("players", "Players")}${tab("history", "History")}${tab("stats", "Stats")}
+      ${tab("score", "Score")}${tab("setup", "New game")}${tab("players", "Players")}${tab("teams", "Teams")}${tab("history", "History")}${tab("stats", "Stats")}
     </nav>
-    <main>${section()}</main>`;
+    ${state.notice ? `<div class="toast" role="status">${state.notice}</div>` : ""}
+    <main class="page-pop" data-transition="${state.transition}">${section()}</main>`;
   bindGlobal();
 }
 
@@ -63,6 +78,7 @@ function tab(route, label) {
 function section() {
   if (state.route === "setup") return setupView();
   if (state.route === "players") return playersView();
+  if (state.route === "teams") return teamsView();
   if (state.route === "history") return historyView();
   if (state.route === "stats") return statsView();
   return scoreView();
@@ -77,40 +93,41 @@ function scoreView() {
   const wins = frameWins(match);
   const balls = ballSetForMode(match.mode);
   const leader = getFrameLeader(frame, players);
-  const target = match.mode === "century" ? `<div class="target">Century target: first to 100</div>` : `<div class="target">Best of ${match.bestOf} · race to ${match.raceTo}</div>`;
+  const winner = match.winnerId ? players.find((player) => player.id === match.winnerId) : null;
+  const target = match.mode === "century" ? "Century target: first to 100" : `Best of ${match.bestOf} · race to ${match.raceTo}`;
 
   return `<section class="score-grid">
     <article class="scoreboard card">
       <div class="score-topline">
         <span class="pill">${match.mode === "century" ? "Century Mode" : "Standard snooker"}</span>
-        ${target}
+        <div class="target">${target}</div>
+        ${winner ? `<div class="winner-banner">🏆 ${winner.name} won this match</div>` : ""}
       </div>
       <div class="player-scores">
-        ${players
-          .map((player, index) => {
-            const stat = frame.playerStats[player.id];
-            const pct = match.mode === "century" ? Math.min(100, stat.points) : Math.min(100, stat.points / Math.max(1, frameScore(frame, leader.id)) * 100);
-            return `<button class="player-score ${index === frame.currentPlayerIndex ? "shooting" : ""}" data-action="switch" data-index="${index}">
-              <span class="avatar" style="--avatar:${player.colour ?? "#14b8a6"}">${initials(player.name)}</span>
-              <span><strong>${player.name}</strong><small>${wins[player.id] ?? 0} frame wins · HB ${stat.highestBreak}</small></span>
-              <b>${stat.points}</b>
-              <i style="width:${pct}%"></i>
-            </button>`;
-          })
-          .join("")}
+        ${players.map((player, index) => {
+          const stat = frame.playerStats[player.id] ?? { points: 0, highestBreak: 0, currentBreak: 0 };
+          const pct = match.mode === "century" ? Math.min(100, stat.points) : Math.min(100, stat.points / Math.max(1, frameScore(frame, leader.id)) * 100);
+          return `<button class="player-score ${index === frame.currentPlayerIndex ? "shooting" : ""}" data-action="switch" data-index="${index}">
+            ${characterAvatar(player, "big")}
+            <span><strong>${player.name}</strong><small>${wins[player.id] ?? 0} frame wins · HB ${stat.highestBreak} · ${frame.endedAt && frame.winnerId === player.id ? "Frame winner 🏆" : "tap to put at table"}</small></span>
+            <b>${stat.points}</b>
+            <i style="width:${pct}%"></i>
+          </button>`;
+        }).join("")}
       </div>
       <div class="live-meta">
         <div><span>At table</span><strong>${current?.name ?? "—"}</strong></div>
         <div><span>Current break</span><strong>${frame.playerStats[current?.id]?.currentBreak ?? 0}</strong></div>
         <div><span>Highest break</span><strong>${Math.max(...players.map((p) => frame.playerStats[p.id]?.highestBreak ?? 0))}</strong></div>
-        <div><span>Leader</span><strong>${leader?.name ?? "—"}</strong></div>
+        <div><span>Frame status</span><strong>${frame.endedAt ? "Saved" : `${leader?.name ?? "—"} leads`}</strong></div>
       </div>
     </article>
 
     <article class="card controls">
       <h2>One-tap scoring</h2>
+      <p class="hint">Pot adds to the player at table. Fouls award points to the next player. Big actions ask before saving.</p>
       <div class="ball-grid">
-        ${balls.map((ball) => `<button class="ball ${ball.className}" data-action="pot" data-ball="${ball.key}" data-points="${ball.value}"><span>${ball.value}</span><small>${ball.label}</small></button>`).join("")}
+        ${balls.map((ball) => `<button class="ball ${ball.className}" data-action="pot" data-ball="${ball.key}" data-points="${ball.value}" ${match.winnerId ? "disabled" : ""}><span>${ball.value}</span><small>${ball.label}</small></button>`).join("")}
       </div>
       <div class="quick-actions">
         <button data-action="foul" data-points="4">Foul +4</button>
@@ -128,6 +145,7 @@ function scoreView() {
         <button class="ghost" data-action="undo">Undo</button>
         <button class="ghost" data-action="redo">Redo</button>
         <button class="danger" data-action="end-frame">End frame</button>
+        <button class="danger" data-action="end-match">End game</button>
         <button class="ghost" data-action="new-frame">Next frame</button>
       </div>
     </article>
@@ -140,9 +158,10 @@ function scoreView() {
 }
 
 function setupView() {
-  const canCentury = state.draft.playerIds.length >= 2;
+  const canCreate = state.draft.playerIds.length >= 2;
   return `<section class="card setup">
     <h2>Start a game</h2>
+    <p class="hint">Pick a team to quickly add its players, or choose any players manually.</p>
     <label>Game type
       <select id="mode">
         <option value="standard" ${state.draft.mode === "standard" ? "selected" : ""}>Standard snooker</option>
@@ -152,14 +171,17 @@ function setupView() {
     <label>Best of frames
       <input id="bestOf" type="number" min="1" step="2" value="${state.draft.mode === "century" ? 1 : state.draft.bestOf}" ${state.draft.mode === "century" ? "disabled" : ""} />
     </label>
+    <label>Add a team
+      <select id="teamQuick"><option value="">Choose team preset…</option>${state.teams.map((team) => `<option value="${team.id}" ${state.draft.teamId === team.id ? "selected" : ""}>${team.name}</option>`).join("")}</select>
+    </label>
     <div class="picker">
       <h3>Choose players</h3>
-      ${state.players.map((player) => `<label class="check"><input type="checkbox" value="${player.id}" ${state.draft.playerIds.includes(player.id) ? "checked" : ""} /> ${player.name}<small>${player.nickname ?? ""}</small></label>`).join("")}
+      ${state.players.map((player) => `<label class="check">${characterAvatar(player)}<input type="checkbox" value="${player.id}" ${state.draft.playerIds.includes(player.id) ? "checked" : ""} /> <span>${player.name}<small>${player.nickname ?? ""}</small></span></label>`).join("")}
     </div>
     <label>Starting player
       <select id="starter">${state.draft.playerIds.map((id) => `<option value="${id}" ${state.draft.starterId === id ? "selected" : ""}>${byId(id)?.name}</option>`).join("")}</select>
     </label>
-    <button class="primary" data-action="create-match" ${canCentury ? "" : "disabled"}>Create match</button>
+    <button class="primary" data-action="create-match" ${canCreate ? "" : "disabled"}>Create match</button>
   </section>`;
 }
 
@@ -175,33 +197,50 @@ function playersView() {
   </section>`;
 }
 
+function teamsView() {
+  return `<section class="split">
+    <form class="card" data-form="team">
+      <h2>${state.selectedTeamId ? "Edit team" : "Create team"}</h2>
+      ${teamFormFields(state.selectedTeamId ? teamById(state.selectedTeamId) : {})}
+      <button class="primary">Save team</button>
+      ${state.selectedTeamId ? `<button type="button" class="ghost" data-action="clear-team">Cancel edit</button>` : ""}
+    </form>
+    <div class="card list"><h2>Teams</h2>${state.teams.map(teamCard).join("") || `<p class="muted">No teams yet. Create your first doubles crew.</p>`}</div>
+  </section>`;
+}
+
 function historyView() {
   return `<section class="card history"><h2>Match history</h2>${state.matches.map((match) => {
     const players = matchPlayers(match);
     const summary = matchSummary(match);
+    const winnerName = players.find((player) => player.id === summary.winnerId)?.name ?? "In progress";
     return `<article class="history-item">
-      <div><strong>${players.map((p) => p.name).join(" vs ")}</strong><small>${money.format(new Date(match.createdAt))} · ${match.mode}</small></div>
+      <div><strong>${players.map((p) => p.name).join(" vs ")}</strong><small>${dateFormat.format(new Date(match.createdAt))} · ${match.mode}</small></div>
       <div>${players.map((p) => `${p.name} ${summary.wins[p.id] ?? 0}`).join(" · ")}</div>
-      <div>Winner: <b>${byId(summary.winnerId)?.name ?? "In progress"}</b> · High breaks ${players.map((p) => `${p.name}: ${summary.highBreaks[p.id]}`).join(", ")}</div>
+      <div>${summary.winnerId ? "🏆" : "⏳"} Winner: <b>${winnerName}</b> · High breaks ${players.map((p) => `${p.name}: ${summary.highBreaks[p.id]}`).join(", ")}</div>
       <button data-action="load-match" data-id="${match.id}">Open</button><button class="danger" data-action="delete-match" data-id="${match.id}">Delete</button>
     </article>`;
   }).join("")}</section>`;
 }
 
 function statsView() {
-  const rows = state.players.map((player) => {
-    const matches = state.matches.filter((match) => match.playerIds.includes(player.id));
-    const wins = matches.filter((match) => match.winnerId === player.id).length;
-    const frameWinsCount = matches.reduce((sum, match) => sum + match.frames.filter((frame) => frame.winnerId === player.id).length, 0);
-    const highBreak = Math.max(0, ...matches.flatMap((match) => match.frames.map((frame) => frame.playerStats[player.id]?.highestBreak ?? 0)));
-    const head = state.players.filter((opponent) => opponent.id !== player.id).map((opponent) => {
-      const played = matches.filter((match) => match.playerIds.includes(opponent.id));
-      const won = played.filter((match) => match.winnerId === player.id).length;
-      return `${opponent.name}: ${won}-${played.length - won}`;
-    }).join(" · ");
-    return `<article class="stat-row"><span class="avatar" style="--avatar:${player.colour}">${initials(player.name)}</span><div><strong>${player.name}</strong><small>${matches.length} matches · ${wins} wins · ${frameWinsCount} frames · HB ${highBreak}</small><em>${head || "No head-to-head yet"}</em></div></article>`;
-  });
-  return `<section class="card"><h2>Player history & head-to-head</h2>${rows.join("")}</section>`;
+  const profiles = state.players.map(playerStats).sort((a, b) => b.winRate - a.winRate || b.highBreak - a.highBreak);
+  const totalFrames = state.matches.reduce((sum, match) => sum + match.frames.length, 0);
+  const biggestBreak = profiles[0]?.highBreak ? profiles.reduce((best, item) => item.highBreak > best.highBreak ? item : best, profiles[0]) : null;
+  const funniest = profiles.reduce((best, item) => item.fouls > best.fouls ? item : best, profiles[0] ?? { fouls: 0, name: "—" });
+  return `<section class="stats-page">
+    <article class="card stat-hero">
+      <h2>Trophy cabinet</h2>
+      <div class="trophy-grid">
+        ${award("🏆", "Table boss", profiles[0]?.name ?? "Play more matches", `${Math.round(profiles[0]?.winRate ?? 0)}% match win rate`)}
+        ${award("🔥", "Break beast", biggestBreak?.name ?? "No breaks yet", `Highest break ${biggestBreak?.highBreak ?? 0}`)}
+        ${award("😂", "Foul goblin", funniest?.name ?? "No fouls yet", `${funniest?.fouls ?? 0} recorded fouls`)}
+        ${award("🎱", "Club activity", `${state.matches.length} matches`, `${totalFrames} frames logged`)}
+      </div>
+    </article>
+    <article class="card"><h2>Useful + silly stats</h2>${profiles.map((profile, index) => statCard(profile, index)).join("")}</article>
+    <article class="card"><h2>Team corner</h2>${teamStats().join("") || `<p class="muted">Create teams to see combined records.</p>`}</article>
+  </section>`;
 }
 
 function emptyCard(title, text) {
@@ -209,14 +248,29 @@ function emptyCard(title, text) {
 }
 
 function playerFormFields(player = {}) {
+  const selected = player.character ?? "rocket";
   return `<input name="id" type="hidden" value="${player.id ?? ""}" />
     <label>Name<input name="name" required value="${player.name ?? ""}" /></label>
     <label>Nickname<input name="nickname" value="${player.nickname ?? ""}" /></label>
-    <label>Colour<input name="colour" type="color" value="${player.colour ?? "#14b8a6"}" /></label>`;
+    <label>Colour<input name="colour" type="color" value="${player.colour ?? "#14b8a6"}" /></label>
+    <label>Animated character<select name="character">${characters.map((character) => `<option value="${character.id}" ${selected === character.id ? "selected" : ""}>${character.emoji} ${character.name}</option>`).join("")}</select></label>
+    <div class="character-picker">${characters.map((character) => `<span class="mini-character">${character.emoji}</span>`).join("")}</div>`;
+}
+
+function teamFormFields(team = {}) {
+  return `<input name="id" type="hidden" value="${team.id ?? ""}" />
+    <label>Team name<input name="name" required value="${team.name ?? ""}" /></label>
+    <label>Team colour<input name="colour" type="color" value="${team.colour ?? "#24d18f"}" /></label>
+    <div class="picker"><h3>Members</h3>${state.players.map((player) => `<label class="check">${characterAvatar(player)}<input name="playerIds" type="checkbox" value="${player.id}" ${(team.playerIds ?? []).includes(player.id) ? "checked" : ""} /> <span>${player.name}<small>${player.nickname ?? ""}</small></span></label>`).join("")}</div>`;
 }
 
 function playerCard(player) {
-  return `<article class="player-card"><span class="avatar" style="--avatar:${player.colour}">${initials(player.name)}</span><div><strong>${player.name}</strong><small>${player.nickname ?? ""}</small></div><button data-action="edit-player" data-id="${player.id}">Edit</button><button class="danger" data-action="delete-player" data-id="${player.id}">Remove</button></article>`;
+  return `<article class="player-card">${characterAvatar(player, "big")}<div><strong>${player.name}</strong><small>${player.nickname ?? ""} · ${characterFor(player).name}</small></div><button data-action="edit-player" data-id="${player.id}">Edit</button><button class="danger" data-action="delete-player" data-id="${player.id}">Remove</button></article>`;
+}
+
+function teamCard(team) {
+  const members = team.playerIds.map(byId).filter(Boolean);
+  return `<article class="player-card"><span class="team-badge" style="--avatar:${team.colour}">👥</span><div><strong>${team.name}</strong><small>${members.map((player) => player.name).join(", ") || "No members yet"}</small></div><button data-action="edit-team" data-id="${team.id}">Edit</button><button class="danger" data-action="delete-team" data-id="${team.id}">Remove</button></article>`;
 }
 
 function eventLog(match, frame, players) {
@@ -229,14 +283,16 @@ function eventLog(match, frame, players) {
 }
 
 function bindGlobal() {
-  app.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", () => { state.route = button.dataset.route; render(); }));
+  app.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", () => { state.route = button.dataset.route; state.transition += 1; render(); }));
   app.onclick = handleClick;
   app.querySelector("[data-form='player']")?.addEventListener("submit", handlePlayerSave);
+  app.querySelector("[data-form='team']")?.addEventListener("submit", handleTeamSave);
   app.querySelector("[data-form='adjust']")?.addEventListener("submit", handleAdjust);
   app.querySelector("#mode")?.addEventListener("change", (event) => { state.draft.mode = event.target.value; render(); });
   app.querySelector("#bestOf")?.addEventListener("input", (event) => { state.draft.bestOf = Number(event.target.value) || 1; });
-  app.querySelectorAll(".check input").forEach((input) => input.addEventListener("change", () => {
-    state.draft.playerIds = [...app.querySelectorAll(".check input:checked")].map((item) => item.value);
+  app.querySelector("#teamQuick")?.addEventListener("change", handleTeamQuickPick);
+  app.querySelectorAll(".check input[type='checkbox']:not([name='playerIds'])").forEach((input) => input.addEventListener("change", () => {
+    state.draft.playerIds = [...app.querySelectorAll(".check input[type='checkbox']:not([name='playerIds']):checked")].map((item) => item.value);
     state.draft.starterId = state.draft.playerIds.includes(state.draft.starterId) ? state.draft.starterId : state.draft.playerIds[0];
     render();
   }));
@@ -251,22 +307,59 @@ async function handleClick(event) {
   const frame = match && currentFrame(match);
   const current = match && match.playerIds[frame.currentPlayerIndex];
 
-  if (action === "seed") { await resetDemoData(); Object.assign(state, await loadState()); state.activeMatchId = state.matches[0]?.id; render(); }
-  if (action === "pot") await updateMatch(applyEvent(match, { type: "pot", playerId: current, points: Number(button.dataset.points), ball: button.dataset.ball }));
-  if (action === "foul") await updateMatch(applyEvent(match, { type: "foul", playerId: current, points: Number(button.dataset.points), awardedToId: opponentForFoul(match, current) }));
-  if (action === "miss") await updateMatch(applyEvent(match, { type: "miss", playerId: current }));
-  if (action === "freeball") await updateMatch(applyEvent(match, { type: "foul", playerId: current, points: 4, awardedToId: opponentForFoul(match, current), miss: true, freeBall: true }));
-  if (action === "switch") await updateMatch(applyEvent(match, { type: "switch", playerId: current, toIndex: Number(button.dataset.index) }));
-  if (action === "undo") await updateMatch(undoEvent(match));
-  if (action === "redo") await updateMatch(redoEvent(match));
-  if (action === "end-frame") await updateMatch(endCurrentFrame(match, getFrameLeader(frame, matchPlayers(match)).id));
-  if (action === "new-frame") await updateMatch(addFrame(match, matchPlayers(match)));
+  if (action === "seed") { await resetDemoData(); Object.assign(state, await loadState()); state.activeMatchId = state.matches[0]?.id; flash("Demo data reset — characters, teams and trophies restored."); }
+  if (!match && ["pot", "foul", "miss", "freeball", "switch", "undo", "redo", "end-frame", "new-frame", "end-match"].includes(action)) return;
+  if (action === "pot") await updateMatch(applyEvent(match, { type: "pot", playerId: current, points: Number(button.dataset.points), ball: button.dataset.ball }), `${byId(current)?.name ?? "Player"} potted ${button.dataset.ball}.`);
+  if (action === "foul") await updateMatch(applyEvent(match, { type: "foul", playerId: current, points: Number(button.dataset.points), awardedToId: opponentForFoul(match, current) }), "Foul saved and points awarded.");
+  if (action === "miss") await updateMatch(applyEvent(match, { type: "miss", playerId: current }), "Miss/safety recorded. Turn moved on.");
+  if (action === "freeball") await updateMatch(applyEvent(match, { type: "foul", playerId: current, points: 4, awardedToId: opponentForFoul(match, current), miss: true, freeBall: true }), "Free ball note saved.");
+  if (action === "switch") await updateMatch(applyEvent(match, { type: "switch", playerId: current, toIndex: Number(button.dataset.index) }), "Player at table changed.");
+  if (action === "undo") await updateMatch(undoEvent(match), "Last event undone.");
+  if (action === "redo") await updateMatch(redoEvent(match), "Event restored.");
+  if (action === "end-frame") await promptEndFrame(match, frame);
+  if (action === "end-match") await promptEndMatch(match, frame);
+  if (action === "new-frame") await promptNextFrame(match, frame);
   if (action === "create-match") await createNewMatch();
   if (action === "edit-player") { state.selectedPlayerId = button.dataset.id; render(); }
   if (action === "clear-player") { state.selectedPlayerId = null; render(); }
-  if (action === "delete-player") { await removePlayer(button.dataset.id); Object.assign(state, await loadState()); render(); }
-  if (action === "load-match") { state.activeMatchId = button.dataset.id; state.route = "score"; render(); }
-  if (action === "delete-match") { await removeMatch(button.dataset.id); Object.assign(state, await loadState()); state.activeMatchId = state.matches[0]?.id; render(); }
+  if (action === "delete-player" && confirm("Remove this player? Past match snapshots stay intact.")) { await removePlayer(button.dataset.id); Object.assign(state, await loadState()); flash("Player removed."); }
+  if (action === "edit-team") { state.selectedTeamId = button.dataset.id; render(); }
+  if (action === "clear-team") { state.selectedTeamId = null; render(); }
+  if (action === "delete-team" && confirm("Remove this team? Players are not deleted.")) { await removeTeam(button.dataset.id); Object.assign(state, await loadState()); flash("Team removed."); }
+  if (action === "load-match") { state.activeMatchId = button.dataset.id; state.route = "score"; state.transition += 1; render(); }
+  if (action === "delete-match" && confirm("Delete this match forever?")) { await removeMatch(button.dataset.id); Object.assign(state, await loadState()); state.activeMatchId = state.matches[0]?.id; flash("Match deleted."); }
+}
+
+async function promptEndFrame(match, frame) {
+  const players = matchPlayers(match);
+  const leader = getFrameLeader(frame, players);
+  if (!confirm(`End and save this frame for ${leader.name}?`)) return;
+  await updateMatch(endCurrentFrame(match, leader.id), `Frame saved. ${leader.name} gets the frame trophy 🏆.`);
+}
+
+async function promptEndMatch(match, frame) {
+  const players = matchPlayers(match);
+  const leader = getFrameLeader(frame, players);
+  const wins = frameWins(match);
+  const matchLeader = players.reduce((best, player) => (wins[player.id] ?? 0) > (wins[best.id] ?? 0) ? player : best, leader);
+  const winner = match.winnerId ? players.find((player) => player.id === match.winnerId) : matchLeader;
+  if (!confirm(`End game now and save ${winner.name} as winner?${frame.endedAt ? "" : ` Current frame will go to ${leader.name}.`}`)) return;
+  await updateMatch(endMatch(match, winner.id), `Game ended and saved. ${winner.name} lifts the trophy 🏆.`);
+}
+
+async function promptNextFrame(match, frame) {
+  if (match.winnerId) {
+    alert("This match already has a winner. Create a new game for the next battle.");
+    return;
+  }
+  let next = match;
+  const players = matchPlayers(match);
+  if (!frame.endedAt) {
+    const leader = getFrameLeader(frame, players);
+    if (!confirm(`Start next frame? First, save this frame for ${leader.name}.`)) return;
+    next = endCurrentFrame(match, leader.id);
+  } else if (!confirm("Start the next frame now?")) return;
+  await updateMatch(addFrame(next, players), "New frame started — rack them up! ✨");
 }
 
 async function handlePlayerSave(event) {
@@ -275,7 +368,19 @@ async function handlePlayerSave(event) {
   await savePlayer(data);
   Object.assign(state, await loadState());
   state.selectedPlayerId = null;
-  render();
+  flash("Player saved with animated character.");
+}
+
+async function handleTeamSave(event) {
+  event.preventDefault();
+  const formData = new FormData(event.currentTarget);
+  const data = Object.fromEntries(formData);
+  data.playerIds = formData.getAll("playerIds");
+  if (data.playerIds.length < 2 && !confirm("Teams are most useful with 2+ players. Save anyway?")) return;
+  await saveTeam(data);
+  Object.assign(state, await loadState());
+  state.selectedTeamId = null;
+  flash("Team saved. You can use it on New game.");
 }
 
 async function handleAdjust(event) {
@@ -284,7 +389,17 @@ async function handleAdjust(event) {
   const frame = currentFrame(match);
   const playerId = match.playerIds[frame.currentPlayerIndex];
   const points = Number(new FormData(event.currentTarget).get("points"));
-  await updateMatch(applyEvent(match, { type: "adjust", playerId, points }));
+  await updateMatch(applyEvent(match, { type: "adjust", playerId, points }), "Manual adjustment saved.");
+}
+
+function handleTeamQuickPick(event) {
+  const team = teamById(event.target.value);
+  state.draft.teamId = event.target.value;
+  if (team) {
+    state.draft.playerIds = [...new Set([...state.draft.playerIds, ...team.playerIds])];
+    state.draft.starterId = state.draft.playerIds.includes(state.draft.starterId) ? state.draft.starterId : state.draft.playerIds[0];
+  }
+  render();
 }
 
 async function createNewMatch() {
@@ -296,15 +411,57 @@ async function createNewMatch() {
   Object.assign(state, await loadState());
   state.activeMatchId = match.id;
   state.route = "score";
-  render();
+  flash("Match created. First break awaits 🎯.");
 }
 
-async function updateMatch(match) {
+async function updateMatch(match, message = "Saved.") {
   await saveMatch(match);
   const index = state.matches.findIndex((item) => item.id === match.id);
   if (index >= 0) state.matches[index] = match;
   state.activeMatchId = match.id;
+  flash(message);
+}
+
+function flash(message) {
+  state.notice = message;
+  state.transition += 1;
   render();
+}
+
+function playerStats(player) {
+  const matches = state.matches.filter((match) => match.playerIds.includes(player.id));
+  const wins = matches.filter((match) => match.winnerId === player.id).length;
+  const frames = matches.flatMap((match) => match.frames);
+  const frameWinsCount = frames.filter((frame) => frame.winnerId === player.id).length;
+  const stats = frames.map((frame) => frame.playerStats[player.id]).filter(Boolean);
+  const highBreak = Math.max(0, ...stats.map((item) => item.highestBreak ?? 0));
+  const pots = stats.reduce((sum, item) => sum + (item.pots ?? 0), 0);
+  const fouls = stats.reduce((sum, item) => sum + (item.fouls ?? 0), 0);
+  const points = stats.reduce((sum, item) => sum + (item.points ?? 0), 0);
+  return { ...player, matches: matches.length, wins, frames: frames.length, frameWinsCount, highBreak, pots, fouls, points, winRate: matches.length ? wins / matches.length * 100 : 0 };
+}
+
+function statCard(profile, index) {
+  const nickname = profile.fouls > profile.pots ? "Chaos merchant" : profile.highBreak >= 50 ? "Break builder" : profile.pots ? "Pot collector" : "Practice table lurker";
+  return `<article class="stat-row fancy-stat"><span class="trophy">${trophies[index % trophies.length]}</span>${characterAvatar(profile)}<div><strong>${profile.name}</strong><small>${profile.matches} matches · ${profile.wins} wins · ${profile.frameWinsCount} frames · ${Math.round(profile.winRate)}% win rate</small><em>${nickname}: ${profile.points} pts, ${profile.pots} pots, ${profile.fouls} fouls, HB ${profile.highBreak}</em></div></article>`;
+}
+
+function teamStats() {
+  return state.teams.map((team) => {
+    const members = team.playerIds.map(byId).filter(Boolean);
+    const combined = members.map(playerStats).reduce((totals, item) => ({
+      wins: totals.wins + item.wins,
+      matches: totals.matches + item.matches,
+      points: totals.points + item.points,
+      fouls: totals.fouls + item.fouls,
+      highBreak: Math.max(totals.highBreak, item.highBreak)
+    }), { wins: 0, matches: 0, points: 0, fouls: 0, highBreak: 0 });
+    return `<article class="stat-row"><span class="team-badge" style="--avatar:${team.colour}">👥</span><div><strong>${team.name}</strong><small>${members.map((player) => player.name).join(" + ") || "No members"}</small><em>Combined: ${combined.wins} wins, ${combined.points} points, HB ${combined.highBreak}, ${combined.fouls} foul giggles</em></div></article>`;
+  });
+}
+
+function award(icon, title, value, note) {
+  return `<div class="award"><span>${icon}</span><strong>${title}</strong><b>${value}</b><small>${note}</small></div>`;
 }
 
 function opponentForFoul(match, currentId) {
@@ -316,6 +473,11 @@ function nearestOdd(value) {
   return number % 2 ? number : number + 1;
 }
 
-function initials(name = "?") {
-  return name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+function characterFor(player = {}) {
+  return characters.find((character) => character.id === player.character) ?? characters[0];
+}
+
+function characterAvatar(player = {}, size = "") {
+  const character = characterFor(player);
+  return `<span class="avatar character ${size}" style="--avatar:${player.colour ?? "#14b8a6"}" title="${character.name}"><span>${character.emoji}</span></span>`;
 }

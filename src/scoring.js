@@ -33,7 +33,7 @@ export const createMatch = ({ players, mode, bestOf, raceTo, starterIndex }) => 
   id: cryptoId("match"),
   mode,
   playerIds: players.map((player) => player.id),
-  playerSnapshots: players.map(({ id, name, nickname }) => ({ id, name, nickname })),
+  playerSnapshots: players.map(({ id, name, nickname, colour, character }) => ({ id, name, nickname, colour, character })),
   bestOf,
   raceTo,
   createdAt: new Date().toISOString(),
@@ -87,6 +87,19 @@ export function endCurrentFrame(match, winnerId) {
   frame.winnerId = winnerId;
   frame.endedAt = new Date().toISOString();
   next.winnerId = getMatchWinner(next);
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+export function endMatch(match, winnerId) {
+  const next = structuredClone(match);
+  const frame = currentFrame(next);
+  if (frame && !frame.endedAt) {
+    frame.winnerId = winnerId;
+    frame.endedAt = new Date().toISOString();
+  }
+  next.winnerId = winnerId;
+  next.endedAt = new Date().toISOString();
   next.updatedAt = new Date().toISOString();
   return next;
 }

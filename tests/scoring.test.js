@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { applyEvent, createMatch, currentFrame, endCurrentFrame, frameWins, redoEvent, undoEvent } from "../src/scoring.js";
+import { applyEvent, createMatch, currentFrame, endCurrentFrame, endMatch, frameWins, redoEvent, undoEvent } from "../src/scoring.js";
 
 const players = [
   { id: "a", name: "Alice" },
@@ -26,6 +26,10 @@ assert.equal(currentFrame(match).playerStats.b.points, 4);
 
 match = endCurrentFrame(match, "a");
 assert.equal(frameWins(match).a, 1);
+
+match = endMatch(match, "a");
+assert.equal(match.winnerId, "a");
+assert.ok(match.endedAt);
 
 let century = createMatch({ players, mode: "century", bestOf: 1, raceTo: 1, starterIndex: 0 });
 for (let i = 0; i < 10; i += 1) {
