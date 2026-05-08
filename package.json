@@ -1,0 +1,20 @@
+{
+  "name": "snooker-mate",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mobile-first snooker scoring app for Cloudflare Pages.",
+  "scripts": {
+    "dev": "npx serve .",
+    "test": "node tests/scoring.test.js"
+  },
+  "keywords": [
+    "snooker",
+    "scoreboard",
+    "cloudflare-pages",
+    "indexeddb"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {},
+  "type": "module"
+}
