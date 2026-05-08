@@ -1,14 +1,19 @@
 import { createMatch, cryptoId } from "./scoring.js";
 
 const DB_NAME = "snooker-mate";
-const DB_VERSION = 1;
-const STORES = ["players", "matches", "settings"];
+const DB_VERSION = 2;
+const STORES = ["players", "matches", "settings", "teams"];
 
 const demoPlayers = [
-  { id: "player-ronnie", name: "Ronnie", nickname: "Rocket", colour: "#f97316", createdAt: "2026-01-02T19:00:00.000Z" },
-  { id: "player-steve", name: "Steve", nickname: "Safety", colour: "#38bdf8", createdAt: "2026-01-02T19:01:00.000Z" },
-  { id: "player-reanne", name: "Reanne", nickname: "Cue Queen", colour: "#a78bfa", createdAt: "2026-01-02T19:02:00.000Z" },
-  { id: "player-judd", name: "Judd", nickname: "Ace", colour: "#22c55e", createdAt: "2026-01-02T19:03:00.000Z" }
+  { id: "player-ronnie", name: "Ronnie", nickname: "Rocket", colour: "#f97316", character: "rocket", createdAt: "2026-01-02T19:00:00.000Z" },
+  { id: "player-steve", name: "Steve", nickname: "Safety", colour: "#38bdf8", character: "wizard", createdAt: "2026-01-02T19:01:00.000Z" },
+  { id: "player-reanne", name: "Reanne", nickname: "Cue Queen", colour: "#a78bfa", character: "queen", createdAt: "2026-01-02T19:02:00.000Z" },
+  { id: "player-judd", name: "Judd", nickname: "Ace", colour: "#22c55e", character: "shark", createdAt: "2026-01-02T19:03:00.000Z" }
+];
+
+const demoTeams = [
+  { id: "team-rapid", name: "Rapid Reds", colour: "#ef4444", playerIds: ["player-ronnie", "player-judd"], createdAt: "2026-01-03T12:00:00.000Z" },
+  { id: "team-cushion", name: "Cushion Crew", colour: "#38bdf8", playerIds: ["player-steve", "player-reanne"], createdAt: "2026-01-03T12:05:00.000Z" }
 ];
 
 function openDb() {
@@ -60,17 +65,26 @@ export const storage = {
 
 export async function loadState() {
   await seedIfNeeded();
-  const [players, matches] = await Promise.all([storage.all("players"), storage.all("matches")]);
+  const [players, matches, teams] = await Promise.all([storage.all("players"), storage.all("matches"), storage.all("teams")]);
   return {
     players: players.sort((a, b) => a.name.localeCompare(b.name)),
-    matches: matches.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+    matches: matches.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)),
+    teams: teams.sort((a, b) => a.name.localeCompare(b.name))
   };
 }
 
 export async function savePlayer(player) {
   const now = new Date().toISOString();
-  const record = { ...player, id: player.id || cryptoId("player"), createdAt: player.createdAt || now, updatedAt: now };
+  const record = { ...player, id: player.id || cryptoId("player"), character: player.character || "rocket", createdAt: player.createdAt || now, updatedAt: now };
   await storage.put("players", record);
+  return record;
+}
+
+export async function saveTeam(team) {
+  const now = new Date().toISOString();
+  const playerIds = Array.isArray(team.playerIds) ? team.playerIds : [team.playerIds].filter(Boolean);
+  const record = { ...team, playerIds, id: team.id || cryptoId("team"), createdAt: team.createdAt || now, updatedAt: now };
+  await storage.put("teams", record);
   return record;
 }
 
@@ -82,6 +96,10 @@ export async function removePlayer(id) {
   await storage.delete("players", id);
 }
 
+export async function removeTeam(id) {
+  await storage.delete("teams", id);
+}
+
 export async function removeMatch(id) {
   await storage.delete("matches", id);
 }
@@ -89,19 +107,28 @@ export async function removeMatch(id) {
 export async function resetDemoData() {
   await storage.clear("players");
   await storage.clear("matches");
+  await storage.clear("teams");
   await seedDemoData(true);
 }
 
 async function seedIfNeeded() {
   const settings = await storage.all("settings");
-  const seeded = settings.find((item) => item.id === "seeded");
+  const seeded = settings.find((item) => item.id === "seeded-v2");
   if (!seeded) await seedDemoData();
 }
 
 async function seedDemoData(force = false) {
   const existingPlayers = await storage.all("players");
-  if (existingPlayers.length && !force) return;
+  if (existingPlayers.length && !force) {
+    await Promise.all(demoPlayers.map((player) => storage.put("players", { ...player, ...(existingPlayers.find((item) => item.id === player.id) ?? {}) })));
+    const existingTeams = await storage.all("teams");
+    if (!existingTeams.length) await Promise.all(demoTeams.map((team) => storage.put("teams", team)));
+    await storage.put("settings", { id: "seeded-v2", value: true, at: new Date().toISOString() });
+    return;
+  }
+
   await Promise.all(demoPlayers.map((player) => storage.put("players", player)));
+  await Promise.all(demoTeams.map((team) => storage.put("teams", team)));
 
   const standard = createMatch({ players: demoPlayers.slice(0, 2), mode: "standard", bestOf: 3, raceTo: 2, starterIndex: 0 });
   standard.createdAt = "2026-04-12T20:05:00.000Z";
@@ -131,4 +158,5 @@ async function seedDemoData(force = false) {
   await storage.put("matches", standard);
   await storage.put("matches", century);
   await storage.put("settings", { id: "seeded", value: true, at: new Date().toISOString() });
+  await storage.put("settings", { id: "seeded-v2", value: true, at: new Date().toISOString() });
 }
