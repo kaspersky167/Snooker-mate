@@ -3,6 +3,7 @@ import { createMatch, cryptoId } from "./scoring.js";
 const DB_NAME = "snooker-mate";
 const DB_VERSION = 2;
 const STORES = ["players", "matches", "settings", "teams"];
+const DEFAULT_SHARED_ROOM = "main";
 
 const demoPlayers = [
   { id: "player-ronnie", name: "Ronnie", nickname: "Rocket", colour: "#f97316", character: "rocket", createdAt: "2026-01-02T19:00:00.000Z" },
@@ -48,7 +49,9 @@ const requestToPromise = (request) =>
     request.onerror = () => reject(request.error);
   });
 
-export const storage = {
+const localStorageAdapter = {
+  type: "local",
+  label: "This browser only",
   async all(store) {
     return tx(store, "readonly", (objectStore) => requestToPromise(objectStore.getAll()));
   },
@@ -62,6 +65,89 @@ export const storage = {
     return tx(store, "readwrite", (objectStore) => objectStore.clear());
   }
 };
+
+function browserConfig() {
+  return globalThis.window?.SnookerMateConfig ?? {};
+}
+
+function currentUrl() {
+  try {
+    return new URL(globalThis.location?.href ?? "http://localhost/");
+  } catch {
+    return new URL("http://localhost/");
+  }
+}
+
+function isLocalHost(hostname) {
+  return ["", "localhost", "127.0.0.1", "::1"].includes(hostname);
+}
+
+function wantsRemoteStorage() {
+  const config = browserConfig();
+  const url = currentUrl();
+  if (url.searchParams.get("storage") === "local") return false;
+  if (url.searchParams.has("room")) return true;
+  if (config.storage === "remote") return true;
+  if (config.storage === "local") return false;
+  return !isLocalHost(url.hostname);
+}
+
+function sharedRoomId() {
+  const config = browserConfig();
+  const url = currentUrl();
+  const fromUrl = url.searchParams.get("room")?.trim();
+  const room = fromUrl || config.defaultRoom || DEFAULT_SHARED_ROOM;
+  return room.toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || DEFAULT_SHARED_ROOM;
+}
+
+function apiUrl(path) {
+  const base = browserConfig().apiBaseUrl ?? "/api";
+  return `${base.replace(/\/$/, "")}${path}`;
+}
+
+async function parseJsonResponse(response) {
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `Shared storage request failed (${response.status})`);
+  return body;
+}
+
+function remoteStorageAdapter(room) {
+  const roomPath = encodeURIComponent(room);
+  return {
+    type: "remote",
+    label: `Shared room: ${room}`,
+    room,
+    async all(store) {
+      const response = await fetch(apiUrl(`/${roomPath}/${encodeURIComponent(store)}`));
+      const body = await parseJsonResponse(response);
+      return body.records ?? [];
+    },
+    async put(store, value) {
+      const response = await fetch(apiUrl(`/${roomPath}/${encodeURIComponent(store)}/${encodeURIComponent(value.id)}`), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(value)
+      });
+      await parseJsonResponse(response);
+    },
+    async delete(store, id) {
+      const response = await fetch(apiUrl(`/${roomPath}/${encodeURIComponent(store)}/${encodeURIComponent(id)}`), { method: "DELETE" });
+      await parseJsonResponse(response);
+    },
+    async clear(store) {
+      const response = await fetch(apiUrl(`/${roomPath}/${encodeURIComponent(store)}`), { method: "DELETE" });
+      await parseJsonResponse(response);
+    }
+  };
+}
+
+export const storage = wantsRemoteStorage() ? remoteStorageAdapter(sharedRoomId()) : localStorageAdapter;
+
+export function storageInfo() {
+  const url = currentUrl();
+  const shareUrl = storage.type === "remote" ? `${url.origin}${url.pathname}?room=${encodeURIComponent(storage.room)}` : null;
+  return { type: storage.type, label: storage.label, room: storage.room, shareUrl };
+}
 
 export async function loadState() {
   await seedIfNeeded();
