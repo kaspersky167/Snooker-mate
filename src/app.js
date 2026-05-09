@@ -13,7 +13,7 @@ import {
   redoEvent,
   undoEvent
 } from "./scoring.js";
-import { loadState, removeMatch, removePlayer, removeTeam, resetDemoData, saveMatch, savePlayer, saveTeam } from "./storage.js";
+import { loadState, removeMatch, removePlayer, removeTeam, resetDemoData, saveMatch, savePlayer, saveTeam, storageInfo } from "./storage.js";
 
 const app = document.querySelector("#app");
 const characters = [
@@ -35,6 +35,7 @@ const state = {
   selectedTeamId: null,
   notice: "",
   transition: 0,
+  storage: storageInfo(),
   draft: { mode: "standard", playerIds: [], bestOf: 3, starterId: null, teamId: "" }
 };
 
@@ -66,9 +67,18 @@ function render() {
     <nav class="tabs" aria-label="Main sections">
       ${tab("score", "Score")}${tab("setup", "New game")}${tab("players", "Players")}${tab("teams", "Teams")}${tab("history", "History")}${tab("stats", "Stats")}
     </nav>
+    ${storageBanner()}
     ${state.notice ? `<div class="toast" role="status">${state.notice}</div>` : ""}
     <main class="page-pop" data-transition="${state.transition}">${section()}</main>`;
   bindGlobal();
+}
+
+
+function storageBanner() {
+  if (state.storage.type === "remote") {
+    return `<aside class="sync-banner card"><div><strong>Shared database is on</strong><span>${state.storage.label}. Send this link to friends and everyone will see the same players, matches, and history.</span></div><button class="ghost" data-action="copy-share">Copy share link</button></aside>`;
+  }
+  return `<aside class="sync-banner local card"><div><strong>Local browser storage</strong><span>Running locally with IndexedDB. Deploy to Cloudflare Pages with a D1 binding named DB, then share a room link for synced history.</span></div></aside>`;
 }
 
 function tab(route, label) {
@@ -308,6 +318,7 @@ async function handleClick(event) {
   const current = match && match.playerIds[frame.currentPlayerIndex];
 
   if (action === "seed") { await resetDemoData(); Object.assign(state, await loadState()); state.activeMatchId = state.matches[0]?.id; flash("Demo data reset — characters, teams and trophies restored."); }
+  if (action === "copy-share" && state.storage.shareUrl) { await copyShareLink(); return; }
   if (!match && ["pot", "foul", "miss", "freeball", "switch", "undo", "redo", "end-frame", "new-frame", "end-match"].includes(action)) return;
   if (action === "pot") await updateMatch(applyEvent(match, { type: "pot", playerId: current, points: Number(button.dataset.points), ball: button.dataset.ball }), `${byId(current)?.name ?? "Player"} potted ${button.dataset.ball}.`);
   if (action === "foul") await updateMatch(applyEvent(match, { type: "foul", playerId: current, points: Number(button.dataset.points), awardedToId: opponentForFoul(match, current) }), "Foul saved and points awarded.");
@@ -328,6 +339,17 @@ async function handleClick(event) {
   if (action === "delete-team" && confirm("Remove this team? Players are not deleted.")) { await removeTeam(button.dataset.id); Object.assign(state, await loadState()); flash("Team removed."); }
   if (action === "load-match") { state.activeMatchId = button.dataset.id; state.route = "score"; state.transition += 1; render(); }
   if (action === "delete-match" && confirm("Delete this match forever?")) { await removeMatch(button.dataset.id); Object.assign(state, await loadState()); state.activeMatchId = state.matches[0]?.id; flash("Match deleted."); }
+}
+
+async function copyShareLink() {
+  try {
+    if (!navigator.clipboard) throw new Error("Clipboard unavailable");
+    await navigator.clipboard.writeText(state.storage.shareUrl);
+    flash("Shared room link copied. Send it to your friends for the same live database.");
+  } catch {
+    prompt("Copy this shared room link", state.storage.shareUrl);
+    flash("Copy the shared room link from the dialog and send it to your friends.");
+  }
 }
 
 async function promptEndFrame(match, frame) {

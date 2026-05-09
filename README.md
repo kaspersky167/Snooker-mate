@@ -1,6 +1,6 @@
 # Snooker Mate
 
-Snooker Mate is a mobile-first scoring web app for friends, clubs, and practice nights. It is built as a static app that deploys cleanly to Cloudflare Pages and stores data locally in IndexedDB today, with a storage boundary that can be swapped for Cloudflare D1, KV, R2, or a Workers API later.
+Snooker Mate is a mobile-first scoring web app for friends, clubs, and practice nights. It deploys to Cloudflare Pages and now supports a shared Cloudflare D1-backed database through Pages Functions, while still using IndexedDB automatically for local development.
 
 ## Features
 
@@ -23,6 +23,7 @@ Snooker Mate is a mobile-first scoring web app for friends, clubs, and practice 
 - Editable history workflow: reopen previous matches, undo/redo frame events, delete matches, and adjust scores.
 - Player history with wins/losses, frame wins, highest breaks, dates, match scores, and head-to-head records.
 - Seed/demo data for quick testing.
+- Shared rooms: deployed Cloudflare Pages links use the same D1 database so friends can see the same players, matches, and history from any device.
 
 ## Research and design notes
 
@@ -55,7 +56,7 @@ npm test
 
 The test suite validates the scoring reducer for pots, fouls, breaks, undo/redo, frame wins, and Century Mode auto-winner logic.
 
-## Deploy to Cloudflare Pages
+## Deploy to Cloudflare Pages with shared storage
 
 1. Push this repository to GitHub or GitLab.
 2. In Cloudflare, create a Pages project connected to the repository.
@@ -63,29 +64,37 @@ The test suite validates the scoring reducer for pots, fouls, breaks, undo/redo,
    - Framework preset: `None`
    - Build command: leave empty
    - Build output directory: `/`
-4. Deploy.
+4. Create a Cloudflare D1 database for Snooker Mate.
+5. In the Pages project, add a D1 binding named `DB` that points at that database. The Pages Function in `functions/api/[[path]].js` creates the `snooker_records` table automatically on first request.
+6. Deploy.
 
-Because the app is plain static HTML/CSS/JavaScript, Cloudflare Pages can serve it without a bundler.
+Because the browser app is still plain static HTML/CSS/JavaScript, there is no bundler. The only server-side piece is the small Pages Function API used for shared D1 reads and writes.
 
 ## Data storage
 
-Current storage lives in `src/storage.js` using IndexedDB stores for:
+Storage lives behind the adapter in `src/storage.js` and uses these logical stores:
 
 - `players`
 - `matches`
 - `settings`
+- `teams`
+
+When the app runs on `localhost`, it uses IndexedDB so development works without a Cloudflare account. When the app runs on a deployed host, or when the URL includes `?room=...`, it uses the shared API at `/api/:room/:store` backed by Cloudflare D1. The default room is `main`, so sharing the normal deployed project link shows the same data to everyone. Use room links such as `https://your-site.pages.dev/?room=tuesday-club` if you want a separate shared history for a different group.
+
+The app shows a storage banner near the top of the UI. In shared mode, use **Copy share link** and send that URL to friends so they join the same room. Add `?storage=local` to force IndexedDB on a deployed host for private testing.
 
 All match scoring is event-based. A match contains frames, frames contain events, and frame stats are recalculated from those events. That makes undo, redo, score edits, and future sync conflict handling easier.
 
-## Future backend upgrade path
+## Shared storage API
 
-The UI talks to a small storage adapter rather than directly scattering persistence calls throughout the app. To add Cloudflare-backed sync later:
+The Cloudflare Pages Function in `functions/api/[[path]].js` exposes:
 
-1. Create a Cloudflare Worker API with endpoints such as `/players`, `/matches`, and `/sync`.
-2. Store relational match/player data in D1, or use KV for simple per-user blobs.
-3. Add auth with Cloudflare Access, Turnstile, or a lightweight email magic-link provider.
-4. Replace or wrap the functions in `src/storage.js` so they first write locally, then sync to the Worker.
-5. Keep the event-log model for offline edits and use `updatedAt` timestamps or per-event IDs to merge changes.
+- `GET /api/:room/:store` — list records.
+- `PUT /api/:room/:store/:id` — upsert a record.
+- `DELETE /api/:room/:store/:id` — delete one record.
+- `DELETE /api/:room/:store` — clear a store in that room.
+
+Only the known stores above are accepted, and room names are limited to lowercase letters, numbers, `_`, and `-`. For production clubs that need private data, add Cloudflare Access or another auth layer in front of the Pages project.
 
 ## Project structure
 
@@ -95,7 +104,8 @@ manifest.webmanifest    PWA metadata
 styles.css              Mobile-first design system and components
 src/app.js              UI rendering and interaction handlers
 src/scoring.js          Scoring/event model and reducer helpers
-src/storage.js          IndexedDB adapter and seed data
+src/storage.js          IndexedDB/shared D1 storage adapter and seed data
+functions/api/[[path]].js Cloudflare Pages Function for shared D1 storage
 tests/scoring.test.js   Node-based scoring tests
 ```
 
