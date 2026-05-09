@@ -1,0 +1,7 @@
+name = "snooker-mate"
+compatibility_date = "2025-09-15"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "snooker-mate"
+database_id = "3d33fcf6-8faa-434a-8eaf-010b0d06d65a"
